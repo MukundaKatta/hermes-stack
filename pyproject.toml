@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-stack"
+version = "0.1.0"
+description = "Four-layer governance harness for Hermes Agent calls: budget cap, egress allowlist, audit trace, structured output. Patterned after the @mukundakatta agent-stack."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mukunda Rao Katta", email = "mukunda.vjcs6@gmail.com" }]
+keywords = [
+  "hermes",
+  "nous-research",
+  "ai",
+  "agents",
+  "llm",
+  "governance",
+  "budget",
+  "egress",
+  "audit",
+  "structured-output",
+  "hermesagentchallenge",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Security",
+]
+dependencies = [
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+schema = ["jsonschema>=4.0"]
+
+[project.urls]
+Homepage = "https://github.com/MukundaKatta/hermes-stack"
+Issues = "https://github.com/MukundaKatta/hermes-stack/issues"
+Source = "https://github.com/MukundaKatta/hermes-stack"
+"Sibling - agentguard" = "https://github.com/MukundaKatta/agentguard-py"
+"Sibling - agentleash" = "https://github.com/MukundaKatta/agentleash"
+"Sibling - agenttrace" = "https://github.com/MukundaKatta/agenttrace"
+"Sibling - agentcast" = "https://github.com/MukundaKatta/agentcast-py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hermes_stack"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/examples", "/README.md", "/LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
