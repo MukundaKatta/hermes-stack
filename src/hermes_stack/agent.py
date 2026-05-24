@@ -25,6 +25,7 @@ from .cast import OutputInvalid, cast_json
 from .guard import EgressDenied, EgressGuard
 from .hermes import HERMES_API_HOST, ChatMessage, HermesResponse, HermesStub
 from .trace import Tracer
+from .vet import ToolArgError, ToolVet
 
 
 @dataclass
@@ -38,20 +39,30 @@ class HermesResult:
 
 
 class HermesAgent:
-    """Wraps a Hermes client with budget, egress, trace, and cast layers.
+    """Wraps a Hermes client with budget, egress, trace, cast, and vet layers.
 
     `client` defaults to HermesStub so the smoke test runs without
     network or API keys. Swap to HermesClient when OPENROUTER_API_KEY is
     set.
+
+    `budget` accepts either an in-process ``BudgetCap`` or a multi-process
+    ``SharedBudgetCap`` — both satisfy the duck-typed interface
+    (``reserve_call``, ``record_spend``, ``snapshot``,
+    ``remaining_calls``).
+
+    `vet` is optional. When passed, any ``call_tool`` invocation runs the
+    args through the registered schema first; the call is rejected with
+    a ``ToolArgError`` carrying an LLM-readable hint if the schema fails.
     """
 
     def __init__(
         self,
         client=None,
         *,
-        budget: BudgetCap | None = None,
+        budget=None,
         guard: EgressGuard | None = None,
         tracer: Tracer | None = None,
+        vet: ToolVet | None = None,
     ) -> None:
         self.client = client or HermesStub()
         self.budget = budget or BudgetCap()
@@ -60,6 +71,7 @@ class HermesAgent:
         # only have to think about tool fetch targets.
         self.guard.allow(HERMES_API_HOST)
         self.tracer = tracer  # may be None; methods no-op when so
+        self.vet = vet
 
     # ---- Tracing helpers -------------------------------------------------
     def _trace(self, name: str, payload: dict | None = None) -> None:
@@ -84,6 +96,37 @@ class HermesAgent:
             {"host": host, "url": url, "chars": len(body)},
         )
         return body
+
+    def call_tool(self, name: str, args: Any, fn: Any) -> Any:
+        """Validate model-produced tool args, then invoke ``fn(**args)``.
+
+        Requires a ``ToolVet`` registered on the agent.  If no vet is
+        registered we refuse rather than silently letting the model run
+        arbitrary tools — failing closed is the whole point of the layer.
+        Returns whatever ``fn`` returns; traces the gate decision either
+        way so an audit log can answer "did the model try a bad call
+        and get caught?" later.
+        """
+        if self.vet is None:
+            raise RuntimeError(
+                "call_tool requires a ToolVet registered on the agent"
+            )
+        try:
+            checked = self.vet.check(name, args)
+        except ToolArgError as exc:
+            self._trace(
+                "tool.args.invalid",
+                {
+                    "tool": exc.tool,
+                    "field": exc.field,
+                    "expected": exc.expected,
+                    "got": exc.got,
+                    "hint": exc.hint,
+                },
+            )
+            raise
+        self._trace("tool.args.ok", {"tool": name})
+        return fn(**checked) if isinstance(checked, dict) else fn(checked)
 
     def chat(self, messages: Iterable[ChatMessage]) -> HermesResponse:
         """Single Hermes call wrapped in budget + trace."""

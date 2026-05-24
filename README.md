@@ -1,7 +1,7 @@
 # hermes-stack
 
-A four-layer governance harness for Hermes Agent calls.
-Drop one `HermesAgent` around the model and you get a budget cap, an egress allowlist, an audit trace, and structured-output enforcement on every call.
+A five-layer governance harness for Hermes Agent calls.
+Drop one `HermesAgent` around the model and you get a budget cap, an egress allowlist, an audit trace, structured-output enforcement, and tool-arg validation on every call.
 Built for the [DEV Community Hermes Agent Challenge](https://dev.to/challenges/hermes-agent-2026-05-15).
 
 ## What it gives you
@@ -9,9 +9,11 @@ Built for the [DEV Community Hermes Agent Challenge](https://dev.to/challenges/h
 | Layer | What it does | Library it mirrors |
 | --- | --- | --- |
 | `BudgetCap` | USD ceiling + per-call ceiling. Raises `BudgetExceeded` on overflow. | [token-budget-py](https://github.com/MukundaKatta/token-budget-py), [agentleash](https://github.com/MukundaKatta/agentleash) |
+| `SharedBudgetCap` | Same USD + call ceiling **across multiple processes**, coordinated via `fcntl.flock` on a JSON state file. Fixes the "three workers, $5 cap each, $15 effective ceiling" footgun. | [token-budget-py](https://github.com/MukundaKatta/token-budget-py), [hermes-budget-skin](https://github.com/MukundaKatta/hermes-budget-skin) |
 | `EgressGuard` | Hostname allowlist on every outbound fetch. Raises `EgressDenied`. | [agentguard-py](https://github.com/MukundaKatta/agentguard-py) |
 | `Tracer` | Append-only JSONL of every call, denial, exception. | [agenttrace-rs](https://github.com/MukundaKatta/agenttrace-rs) |
 | `cast_json` | Pulls JSON out of a chatty model reply, validates against a schema, retries once. | [agentcast-py](https://github.com/MukundaKatta/agentcast-py) |
+| `ToolVet` | Validates tool args **before** the tool runs. Raises `ToolArgError` with an LLM-readable hint so the model can repair the call without burning a tool execution cycle. | [agentvet](https://github.com/MukundaKatta/agentvet), [agentvet-rs](https://github.com/MukundaKatta/agentvet-rs) |
 
 Each layer fails closed. The audit trail captures the failure before it propagates.
 
@@ -117,9 +119,19 @@ run.end
 
 One line per event. Every entry has `ts`, `event`, `run_id`, and a payload. A crashed run still leaves a `run.end` row with the exception type and message.
 
-## The four layers in plain words
+## The five layers in plain words
 
 **Budget cap.** Pick a dollar number you can live with as the worst case. Pick a call-count number too. If a tool call would push past either, the agent stops. The cap is thread-safe, so two tools running in parallel cannot race past it.
+
+**Shared budget cap (multi-process).** The plain `BudgetCap` lives in one process. The moment you spawn a worker pool, a LaunchAgent, or a CLI ad-hoc next to a daemon, each one carries its own counter — three $5 caps = $15 effective ceiling. `SharedBudgetCap` persists the running spend in a JSON file under `fcntl.flock`, so every cooperating process reads and writes the same total. Drop-in compatible with `BudgetCap` on the spend-recording side.
+
+```python
+from hermes_stack import HermesAgent, SharedBudgetCap
+
+agent = HermesAgent(
+    budget=SharedBudgetCap(path="/var/run/hermes/budget.json", usd_cap=5.00),
+)
+```
 
 **Egress allowlist.** Tools fetch URLs. Models hallucinate URLs. The allowlist is the safety net. The Hermes inference host is added automatically; you only think about the URLs your tools actually need.
 
@@ -127,13 +139,31 @@ One line per event. Every entry has `ts`, `event`, `run_id`, and a payload. A cr
 
 **Structured output.** Hermes-3 follows instructions, but real responses still drift. `cast_json` strips chat prose, extracts the JSON block (fenced or inline), and validates against your schema. If the first reply fails, the agent issues one repair prompt and casts again.
 
+**Tool-arg vet.** Models hallucinate tool arguments the way they hallucinate URLs. Register each tool's schema with `ToolVet`; the agent then validates model-produced args before invoking the tool. Failures raise `ToolArgError` carrying a one-line, LLM-readable hint suitable for direct injection into a repair prompt.
+
+```python
+from hermes_stack import HermesAgent, ToolVet
+
+vet = ToolVet()
+vet.register("fetch_url", {
+    "type": "object",
+    "required": ["url"],
+    "properties": {"url": {"type": "string"}, "timeout": {"type": "number"}},
+})
+
+agent = HermesAgent(vet=vet)
+agent.call_tool("fetch_url", model_produced_args, real_fetch_fn)
+```
+
+`call_tool` fails closed if no vet is registered — the agent refuses to run an arbitrary tool without a schema.
+
 ## Tests
 
 ```bash
 python3 -m pytest tests/ -v
 ```
 
-23 tests cover budget, guard, trace, cast, and an end-to-end agent run with both happy-path and failure-path cases (egress denial, budget overflow, repair retry).
+44 tests cover budget (in-process + shared multi-process), guard, trace, cast, vet, and an end-to-end agent run with both happy-path and failure-path cases (egress denial, budget overflow, repair retry, bad tool args). The shared-budget suite includes a real `multiprocessing.Pool` scenario that proves three workers cannot collectively breach a shared cap.
 
 ## How it composes with the agent-stack
 
