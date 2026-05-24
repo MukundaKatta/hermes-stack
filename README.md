@@ -39,6 +39,36 @@ curve, and supports `jitter="full" | "equal" | "none"` (the last is for
 deterministic tests). Pair with a `ToolVet` and `Tracer` for full audit
 of every retried attempt (`hermes.retry` events land in the JSONL).
 
+### One-line wiring from env
+
+Wiring six layers by hand is fine for tests but tedious for a long-running
+agent.  `HermesConfig.from_env()` reads a small env-var surface and hands
+back a fully configured `HermesAgent`:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+export HERMES_BUDGET_USD_CAP=5.00
+export HERMES_BUDGET_CALL_CAP=200
+export HERMES_BUDGET_PATH=/var/run/hermes/budget.json   # multi-process safe
+export HERMES_ALLOW_HOSTS=api.anthropic.com,docs.python.org
+export HERMES_TRACE_PATH=/var/log/hermes-audit.jsonl
+export HERMES_RETRY_MAX_ATTEMPTS=4
+export HERMES_RETRY_BASE_DELAY=0.5
+```
+
+```python
+from hermes_stack import agent_from_env
+
+agent = agent_from_env()   # full stack ready
+resp = agent.chat([ChatMessage(role="user", content="hi")])
+```
+
+Skip any env var to fall back to its default. With nothing set you get a
+`HermesStub` client, a $1 in-process budget cap, no retries — exactly
+what the smoke demo needs. `HermesConfig` is also exposed as a dataclass
+if you want to build manually for tests or introspect what was picked up
+from the environment.
+
 ## Quickstart
 
 ```bash

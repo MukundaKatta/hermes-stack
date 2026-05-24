@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hermes-stack"
-version = "0.3.0"
-description = "Six-layer governance harness for Hermes Agent calls: budget cap, egress allowlist, audit trace, structured output, tool-arg vet, backoff retry. Patterned after the @mukundakatta agent-stack."
+version = "0.4.0"
+description = "Six-layer governance harness for Hermes Agent calls: budget cap, egress allowlist, audit trace, structured output, tool-arg vet, backoff retry. Ships HermesConfig.from_env() to wire all layers from a small env-var surface. Patterned after the @mukundakatta agent-stack."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

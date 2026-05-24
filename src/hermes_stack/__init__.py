@@ -28,6 +28,7 @@ Patterned after the @mukundakatta agent-stack:
 from .agent import HermesAgent, HermesResult
 from .budget import BudgetCap, BudgetExceeded
 from .cast import OutputInvalid, cast_json
+from .config import HermesConfig, agent_from_env
 from .guard import EgressDenied, EgressGuard
 from .hermes import HermesClient, HermesStub, ChatMessage
 from .retry import (
@@ -51,6 +52,7 @@ __all__ = [
     "HERMES_RETRYABLE_CODES",
     "HermesAgent",
     "HermesClient",
+    "HermesConfig",
     "HermesResult",
     "HermesStub",
     "OutputInvalid",
@@ -59,10 +61,11 @@ __all__ = [
     "ToolArgError",
     "ToolVet",
     "Tracer",
+    "agent_from_env",
     "aretry",
     "cast_json",
     "is_hermes_retryable",
     "retry",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
