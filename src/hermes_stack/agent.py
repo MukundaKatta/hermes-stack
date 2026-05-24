@@ -24,6 +24,7 @@ from .budget import BudgetCap, BudgetExceeded
 from .cast import OutputInvalid, cast_json
 from .guard import EgressDenied, EgressGuard
 from .hermes import HERMES_API_HOST, ChatMessage, HermesResponse, HermesStub
+from .retry import RetryPolicy, is_hermes_retryable, retry
 from .trace import Tracer
 from .vet import ToolArgError, ToolVet
 
@@ -63,6 +64,7 @@ class HermesAgent:
         guard: EgressGuard | None = None,
         tracer: Tracer | None = None,
         vet: ToolVet | None = None,
+        retry: RetryPolicy | None = None,
     ) -> None:
         self.client = client or HermesStub()
         self.budget = budget or BudgetCap()
@@ -72,6 +74,11 @@ class HermesAgent:
         self.guard.allow(HERMES_API_HOST)
         self.tracer = tracer  # may be None; methods no-op when so
         self.vet = vet
+        # When set, ``chat`` retries transient failures (rate_limit, overloaded,
+        # api_error, timeout) with exponential backoff.  Each retry attempt
+        # reserves another call against the budget cap so a runaway retry
+        # loop cannot quietly exceed ``call_cap``.
+        self.retry_policy = retry
 
     # ---- Tracing helpers -------------------------------------------------
     def _trace(self, name: str, payload: dict | None = None) -> None:
@@ -129,49 +136,79 @@ class HermesAgent:
         return fn(**checked) if isinstance(checked, dict) else fn(checked)
 
     def chat(self, messages: Iterable[ChatMessage]) -> HermesResponse:
-        """Single Hermes call wrapped in budget + trace."""
+        """Single Hermes call wrapped in budget + trace (+ optional retry).
+
+        When ``self.retry_policy`` is set, transient failures (rate_limit,
+        overloaded, api_error, timeout) trigger an exponential-backoff
+        retry instead of propagating.  Each attempt reserves a call
+        against the budget cap, so retries cannot silently exceed
+        ``call_cap``.  Non-retryable exceptions propagate immediately
+        without burning the retry budget.
+        """
         msgs = list(messages)
-        self.budget.reserve_call()
-        self._trace(
-            "hermes.call",
-            {
-                "model": self.client.model,
-                "messages": len(msgs),
-                "calls_left": self.budget.remaining_calls(),
-            },
-        )
-        try:
-            resp = self.client.complete(msgs)
-        except Exception as exc:  # noqa: BLE001 - capture and re-raise
+
+        def _attempt() -> HermesResponse:
+            self.budget.reserve_call()
             self._trace(
-                "hermes.error",
-                {"exception_type": type(exc).__name__, "message": str(exc)},
-            )
-            raise
-        # Spend recording can itself raise BudgetExceeded; trace either way.
-        try:
-            self.budget.record_spend(resp.usd_cost)
-        except BudgetExceeded as exc:
-            self._trace(
-                "budget.exceeded",
+                "hermes.call",
                 {
-                    "kind": exc.kind,
-                    "requested": exc.requested,
-                    "cap": exc.cap,
-                    "usd_cost_of_this_call": resp.usd_cost,
+                    "model": self.client.model,
+                    "messages": len(msgs),
+                    "calls_left": self.budget.remaining_calls(),
                 },
             )
-            raise
-        self._trace(
-            "hermes.ok",
-            {
-                "prompt_tokens": resp.prompt_tokens,
-                "completion_tokens": resp.completion_tokens,
-                "usd_cost": resp.usd_cost,
-                "snapshot": self.budget.snapshot(),
-            },
+            try:
+                resp = self.client.complete(msgs)
+            except Exception as exc:  # noqa: BLE001 - capture, classify, re-raise
+                self._trace(
+                    "hermes.error",
+                    {"exception_type": type(exc).__name__, "message": str(exc)},
+                )
+                raise
+            try:
+                self.budget.record_spend(resp.usd_cost)
+            except BudgetExceeded as exc:
+                self._trace(
+                    "budget.exceeded",
+                    {
+                        "kind": exc.kind,
+                        "requested": exc.requested,
+                        "cap": exc.cap,
+                        "usd_cost_of_this_call": resp.usd_cost,
+                    },
+                )
+                raise
+            self._trace(
+                "hermes.ok",
+                {
+                    "prompt_tokens": resp.prompt_tokens,
+                    "completion_tokens": resp.completion_tokens,
+                    "usd_cost": resp.usd_cost,
+                    "snapshot": self.budget.snapshot(),
+                },
+            )
+            return resp
+
+        if self.retry_policy is None:
+            return _attempt()
+
+        def _on_retry(exc: BaseException, attempt: int, delay: float) -> None:
+            self._trace(
+                "hermes.retry",
+                {
+                    "attempt": attempt,
+                    "delay_s": round(delay, 4),
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            )
+
+        return retry(
+            _attempt,
+            policy=self.retry_policy,
+            should_retry=lambda e: is_hermes_retryable(e) and not isinstance(e, BudgetExceeded),
+            on_retry=_on_retry,
         )
-        return resp
 
     def run_structured(
         self,

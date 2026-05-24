@@ -1,7 +1,7 @@
 # hermes-stack
 
-A five-layer governance harness for Hermes Agent calls.
-Drop one `HermesAgent` around the model and you get a budget cap, an egress allowlist, an audit trace, structured-output enforcement, and tool-arg validation on every call.
+A six-layer governance harness for Hermes Agent calls.
+Drop one `HermesAgent` around the model and you get a budget cap, an egress allowlist, an audit trace, structured-output enforcement, tool-arg validation, and exponential-backoff retries on transient failures.
 Built for the [DEV Community Hermes Agent Challenge](https://dev.to/challenges/hermes-agent-2026-05-15).
 
 ## What it gives you
@@ -14,8 +14,30 @@ Built for the [DEV Community Hermes Agent Challenge](https://dev.to/challenges/h
 | `Tracer` | Append-only JSONL of every call, denial, exception. | [agenttrace-rs](https://github.com/MukundaKatta/agenttrace-rs) |
 | `cast_json` | Pulls JSON out of a chatty model reply, validates against a schema, retries once. | [agentcast-py](https://github.com/MukundaKatta/agentcast-py) |
 | `ToolVet` | Validates tool args **before** the tool runs. Raises `ToolArgError` with an LLM-readable hint so the model can repair the call without burning a tool execution cycle. | [agentvet](https://github.com/MukundaKatta/agentvet), [agentvet-rs](https://github.com/MukundaKatta/agentvet-rs) |
+| `RetryPolicy` | Exponential backoff (full jitter) on transient failures: `rate_limit_error`, `overloaded_error`, `api_error`, `timeout`. Each attempt counts against the budget cap so a runaway retry loop cannot quietly exceed `call_cap`. | [llm-retry-py](https://github.com/MukundaKatta/llm-retry-py), [llm-retry](https://crates.io/crates/llm-retry) |
 
 Each layer fails closed. The audit trail captures the failure before it propagates.
+
+### Retry usage
+
+```python
+from hermes_stack import HermesAgent, BudgetCap, RetryPolicy
+
+agent = HermesAgent(
+    client=HermesClient(),
+    budget=BudgetCap(usd_cap=1.00, call_cap=20),
+    retry=RetryPolicy(max_attempts=4, base_delay_s=0.5, jitter="full"),
+)
+
+# A transient 429 / overloaded_error retries automatically up to 4 times
+# with backoff; auth or validation errors propagate immediately.
+resp = agent.chat([ChatMessage(role="user", content="hi")])
+```
+
+`RetryPolicy` exposes `delay_for(attempt)` so you can preview the backoff
+curve, and supports `jitter="full" | "equal" | "none"` (the last is for
+deterministic tests). Pair with a `ToolVet` and `Tracer` for full audit
+of every retried attempt (`hermes.retry` events land in the JSONL).
 
 ## Quickstart
 

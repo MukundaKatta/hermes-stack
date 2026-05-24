@@ -1,6 +1,6 @@
-"""hermes-stack: five-layer governance harness for Hermes Agent calls.
+"""hermes-stack: six-layer governance harness for Hermes Agent calls.
 
-The five layers, each enforceable on its own:
+The six layers, each enforceable on its own:
 
 1. Budget cap         - USD ceiling + per-call ceiling. Raises BudgetExceeded.
                         SharedBudgetCap variant gives the same cap across
@@ -10,6 +10,9 @@ The five layers, each enforceable on its own:
 4. Structured output  - JSON schema check + one repair retry. Raises OutputInvalid.
 5. Tool-arg vet       - Validate model-produced tool arguments before the
                         tool runs. Raises ToolArgError with an LLM-readable hint.
+6. Backoff retry      - Re-issue transient failures (rate_limit / overloaded /
+                        api_error / timeout) with exponential backoff + jitter.
+                        Each attempt counts against the budget cap.
 
 Built for the DEV Community Hermes Agent Challenge (May 2026).
 Patterned after the @mukundakatta agent-stack:
@@ -19,6 +22,7 @@ Patterned after the @mukundakatta agent-stack:
   - agentcast-py     https://github.com/MukundaKatta/agentcast-py
   - agentvet         https://github.com/MukundaKatta/agentvet
   - token-budget-py  https://github.com/MukundaKatta/token-budget-py
+  - llm-retry-py     https://github.com/MukundaKatta/llm-retry-py
 """
 
 from .agent import HermesAgent, HermesResult
@@ -26,6 +30,13 @@ from .budget import BudgetCap, BudgetExceeded
 from .cast import OutputInvalid, cast_json
 from .guard import EgressDenied, EgressGuard
 from .hermes import HermesClient, HermesStub, ChatMessage
+from .retry import (
+    HERMES_RETRYABLE_CODES,
+    RetryPolicy,
+    aretry,
+    is_hermes_retryable,
+    retry,
+)
 from .shared_budget import SharedBudgetCap
 from .trace import AuditEvent, Tracer
 from .vet import ToolArgError, ToolVet
@@ -37,16 +48,21 @@ __all__ = [
     "ChatMessage",
     "EgressDenied",
     "EgressGuard",
+    "HERMES_RETRYABLE_CODES",
     "HermesAgent",
     "HermesClient",
     "HermesResult",
     "HermesStub",
     "OutputInvalid",
+    "RetryPolicy",
     "SharedBudgetCap",
     "ToolArgError",
     "ToolVet",
     "Tracer",
+    "aretry",
     "cast_json",
+    "is_hermes_retryable",
+    "retry",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
